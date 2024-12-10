@@ -1,5 +1,12 @@
-# peripage-python
+# peripage-python-bleak
 ### Python module for printing on Peripage printers
+
+**Still in the stage of development**
+
+**This is the same python module for Peripage printers
+But instead of using pybluez for bluetooth in python, I changed it to the library of bleak, as pybluez is no longer in development and is hard to install under windows.**
+
+
 
 **This project is a continued development of the [original project](https://github.com/eliasweingaertner/peripage-A6-bluetooth) made by [Elias Weingärtner](https://github.com/eliasweingaertner). This module combined all results of reverse engineering of the Peripage A6/A6+ protocol in a python utility providing interface and CLI tool for printing on this thermal printer.**
 
