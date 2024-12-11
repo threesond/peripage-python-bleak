@@ -31,6 +31,7 @@ from bleak import BleakClient
 
 import PIL.Image
 import PIL.ImageOps
+from PIL import Image, ImageDraw, ImageFont
 
 
 class PrinterTypeSpecs:
@@ -812,6 +813,58 @@ class Printer:
         # Delegate to impl
         await self.printRowBytesList([imagebytes[i:i+self.getRowBytes()]
                                for i in range(0, len(imagebytes), self.getRowBytes())], delay=delay)
+    
+    async def printTxtFile(self, txt_file:str, font_file:str, font_size:int, line_break:int, delay=0.01, resample=PIL.Image.Resampling.NEAREST) -> None:
+        """Print a txt file
+
+        Args:
+            txt_file (str): path of the txt file to print
+            font_file (str): font file to use
+            font_size (int): font size when printing
+            line_break (int): line breaks to use between lines
+        """
+        def getsize(font, line):
+            left, top, right, bottom = font.getbbox(line)
+            tw, th = right - left, bottom - top
+            return tw, th
+        custom_width = self.getRowWidth()
+        lines_to_print = []
+        with open(txt_file, 'r', encoding='utf-8') as f:
+            line = f.read()
+            line = line.replace('\n', '')
+            font = ImageFont.truetype(font_file, font_size)
+            while getsize(font, line)[0]>custom_width-20:
+                for st in range(len(line)):
+                    t_line = line[:st]
+                    t_w, _ = getsize(font, t_line)
+                    if t_w >= custom_width-20:
+                        line = line[st:]
+                        lines_to_print.append(t_line)
+                        break
+        lines_to_print.append(line)
+        y = 0
+        for line in lines_to_print:
+            _, line_height = getsize(font, line)
+            y += line_height+line_break
+        max_width = max([getsize(font,l)[0] for l in lines_to_print])
+        image = Image.new("RGB", (max_width, y), "white")
+        draw = ImageDraw.Draw(image)
+        y_offset = 0
+        for l in lines_to_print:
+            draw.text((0, y_offset), l, font=font, fill="black")
+            _, lh = getsize(font,l)
+            y_offset += lh+line_break
+        img = image
+        img = img.convert('L')
+        img = PIL.ImageOps.invert(img)
+        img = img.resize((self.getRowWidth(), int(
+            self.getRowWidth() / img.size[0] * img.size[1])), resample)
+        img = img.convert('1')
+
+        imgbytes = img.tobytes()
+        await self.printImageBytes(imgbytes, delay=delay)
+        
+        
 
     async def printImage(self, img: PIL.Image.Image, delay=0.01, resample=PIL.Image.Resampling.NEAREST) -> None:
         """

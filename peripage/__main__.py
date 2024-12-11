@@ -83,6 +83,28 @@ async def main():
         help='Ask the printer to introduce itself',
         action='store_true'
     )
+    group.add_argument(
+        '-tf', '--textfile',
+        help='Path of the txt file to print',
+        type=str
+    )
+    parser.add_argument(
+        '-fo', '--fontfile',
+        help='Font file to use when printing txt file',
+        type=str
+    )
+    parser.add_argument(
+        '-fs', '--fontsize',
+        help='Font size to use when printing txt file',
+        type=int,
+        default=18
+    )
+    parser.add_argument(
+        '-lb', '--linebreak',
+        help='Line break to use when printing txt file',
+        type=int,
+        default=2
+    )
 
     args = parser.parse_args()
 
@@ -98,6 +120,21 @@ async def main():
         device_full = await printer.getDeviceFull()
         print(device_full.decode('ascii'))
         await printer.disconnect()
+        sys.exit(0)
+        
+    elif 'textfile' in args and args.textfile is not None:
+        await printer.setConcentration(args.concentration)
+        text_file = args.textfile
+        font_file = args.fontfile
+        font_size = args.fontsize
+        line_break = args.linebreak
+        await printer.printTxtFile(text_file, font_file, font_size, line_break, 0.01, resample=PIL.Image.Resampling.BOX)
+
+        if args.break_size > 0:
+            await printer.printBreak(args.break_size)
+
+        await printer.disconnect()
+
         sys.exit(0)
 
     elif 'stream' in args and args.stream:
