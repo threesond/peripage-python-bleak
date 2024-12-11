@@ -32,7 +32,7 @@ from bleak import BleakClient
 import PIL.Image
 import PIL.ImageOps
 from PIL import Image, ImageDraw, ImageFont
-
+import re
 
 class PrinterTypeSpecs:
     """
@@ -832,16 +832,19 @@ class Printer:
         with open(txt_file, 'r', encoding='utf-8') as f:
             line = f.read()
             line = line.replace('\n', '')
+            line = line.replace('\u3000',' ')
+            line = re.sub(' +', ' ', line)
             font = ImageFont.truetype(font_file, font_size)
             while getsize(font, line)[0]>custom_width-20:
                 for st in range(len(line)):
-                    t_line = line[:st]
+                    t_line = line[:st].strip()
                     t_w, _ = getsize(font, t_line)
                     if t_w >= custom_width-20:
                         line = line[st:]
                         lines_to_print.append(t_line)
                         break
         lines_to_print.append(line)
+        print(lines_to_print)
         y = 0
         for line in lines_to_print:
             _, line_height = getsize(font, line)

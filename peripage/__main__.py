@@ -97,7 +97,7 @@ async def main():
         '-fs', '--fontsize',
         help='Font size to use when printing txt file',
         type=int,
-        default=18
+        default=20
     )
     parser.add_argument(
         '-lb', '--linebreak',
