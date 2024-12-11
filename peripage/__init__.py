@@ -22,11 +22,12 @@ __license__ = 'GPLv3'
 __copyright__ = 'Copyright (c) GPLv3 2021-2023 bitrate16 (pegasko)'
 
 
+import asyncio
 import time
 import qrcode
 import typing
 import enum
-import bluetooth
+from bleak import BleakClient
 
 import PIL.Image
 import PIL.ImageOps
@@ -47,6 +48,7 @@ class PrinterTypeSpecs:
         self.row_bytes = row_bytes
         self.row_width = row_width
         self.row_characters = row_characters
+
 
 class PrinterType(enum.Enum):
     """
@@ -81,7 +83,7 @@ class PrinterType(enum.Enum):
     @classmethod
     def names(cls) -> typing.List[str]:
         """List available keys from Enum"""
-        return [ e.name for e in cls ]
+        return [e.name for e in cls]
 
     def __new__(cls, *args, **kwds):
         value = len(cls.__members__) + 1
@@ -91,6 +93,7 @@ class PrinterType(enum.Enum):
 
     def __init__(self, spec: PrinterTypeSpecs):
         self.spec = spec
+
 
 class Printer:
     """
@@ -113,7 +116,7 @@ class Printer:
         in most internal calls.
         """
 
-        return ''.join([ i for i in text if (31 < ord(i) or ord(i) == 10) and ord(i) < 127 ])
+        return ''.join([i for i in text if (31 < ord(i) or ord(i) == 10) and ord(i) < 127])
 
     @staticmethod
     def is_safe_ascii(text: str) -> bool:
@@ -126,7 +129,7 @@ class Printer:
                 return False
         return True
 
-    def __init__(self, mac: str, printer_type: PrinterType, timeout: float=1.0):
+    def __init__(self, mac: str, printer_type: PrinterType, timeout: float = 5.0):
         """
         Create instance of peripage connector. `mac` and `printer_type` are
         required for bluetooth connection and printer-specific printing
@@ -144,6 +147,9 @@ class Printer:
         self.mac = mac
         self.timeout = timeout
         self.printer_type = printer_type
+        self.tx_characteristic = "0000ff02-0000-1000-8000-00805f9b34fb"
+        self.rx_characteristic = "0000ff01-0000-1000-8000-00805f9b34fb"
+        self._loop = asyncio.get_event_loop_policy().new_event_loop()
 
         # buffer used for continuous printing with line wrapping
         self.print_buffer = ''
@@ -152,14 +158,12 @@ class Printer:
         """
         Check if printer is connected (socket alive)
         """
-
-        try:
-            self.sock.getpeername()
-            return True
-        except:
+        if self.client is not None:
+            return self.client.is_connected
+        else:
             return False
 
-    def connect(self) -> None:
+    async def connect(self) -> None:
         """
         Open a new connection to the printer without checking for existing
         connection. In case of malfunction and/or twice connecting to the same
@@ -168,12 +172,10 @@ class Printer:
         In order to make printer operate normally, it is required to call
         `reset()` after connecting.
         """
+        self.client = BleakClient(self.mac)
+        await self.client.connect(timeout=self.timeout)
 
-        self.sock = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-        self.sock.connect((self.mac, 1))
-        self.sock.settimeout(self.timeout)
-
-    def reconnect(self) -> None:
+    async def reconnect(self) -> None:
         """
         Reconnect to the printer with existing connection check.
 
@@ -182,44 +184,31 @@ class Printer:
         """
 
         if self.isConnected():
-            # self.sock.shutdown(socket.SHUT_RDWR)
-            self.sock.close()
-            del self.sock
+            self.client.disconnect()
+            self.client = None
 
-        self.sock = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-        self.sock.connect((self.mac, 1))
-        self.sock.settimeout(self.timeout)
+        self.client = BleakClient(self.mac)
+        await self.client.connect(timeout=self.timeout)
 
-    def disconnect(self) -> None:
+    async def disconnect(self) -> None:
         """
         Disconnect from the printer.
         """
 
         if self.isConnected():
-            # self.sock.shutdown(socket.SHUT_RDWR)
-            self.sock.close()
-            del self.sock
+            await self.client.disconnect()
+            self.client = None
 
-    def setTimeout(self, timeout) -> None:
-        """
-        Set the bluetooth socket connection recv / send timeout.
-        """
-
-        self.timeout = timeout
-        if self.isConnected():
-            self.sock.settimeout(timeout)
-
-    def tellPrinter(self, byteseq: bytes) -> None:
+    async def tellPrinter(self, byteseq: bytes) -> None:
         """
         Send `bytes` to the printer without response.
 
         Arguments:
         * `byteseq` - `bytes` data
         """
+        await self.client.write_gatt_char(self.tx_characteristic, byteseq)
 
-        self.sock.send(byteseq)
-
-    def askPrinter(self, byteseq: bytes, recv_size: int=1024) -> bytes:
+    async def askPrinter(self, byteseq: bytes, recv_size: int = 1024) -> bytes:
         """
         Send `bytes` to the printer with response.
 
@@ -228,10 +217,11 @@ class Printer:
         * `byteseq` - `bytes` data
         """
 
-        self.sock.send(byteseq)
-        return self.sock.recv(recv_size)
+        await self.client.write_gatt_char(self.tx_characteristic,byteseq)
+        response = await self.client.read_gatt_char(self.rx_characteristic)
+        return response
 
-    def listenPrinter(self, recv_size: int=1024) -> bytes:
+    def listenPrinter(self, recv_size: int = 1024) -> bytes:
         """
         Receive data from printer.
 
@@ -252,7 +242,7 @@ class Printer:
         for s in byteseq:
             self.sock.send(s)
 
-    def askPrinterSeq(self, byteseq: typing.Iterable[bytes], recv_size: int=1024) -> bytes:
+    def askPrinterSeq(self, byteseq: typing.Iterable[bytes], recv_size: int = 1024) -> bytes:
         """
         Send list of `bytes` to the printer with response.
 
@@ -327,7 +317,7 @@ class Printer:
 
         Example: Peripage A6+ returns `\\x00@` (equals to `bytes[2] = { 0, 64 }`).
         """
-        return int(self.askPrinter(bytes.fromhex('10ff50f1'))[1])
+        return self.askPrinter(bytes.fromhex('10ff50f1'))
 
     def getDeviceHardware(self) -> bytes:
         """
@@ -423,7 +413,7 @@ class Printer:
 
         return 0xffff
 
-    def setDeviceSerialNumber(self, serial_number: str, wait: bool=True) -> None:
+    async def setDeviceSerialNumber(self, serial_number: str, wait: bool = True) -> None:
         """
         Set device serial number.
 
@@ -441,14 +431,15 @@ class Printer:
         `Printer.is_safe_ascii()` check.
         """
 
-        request = bytes.fromhex('10ff20f4') + Printer.filter_ascii(serial_number).encode('ascii') + b'\0'
+        request = bytes.fromhex(
+            '10ff20f4') + Printer.filter_ascii(serial_number).encode('ascii') + b'\0'
 
         if wait:
-            return self.askPrinter(request)
+            return await self.askPrinter(request)
         else:
-            self.tellPrinter(request)
+            await self.tellPrinter(request)
 
-    def setPowerTimeout(self, timeout: int, wait: bool=True) -> None:
+    async def setPowerTimeout(self, timeout: int, wait: bool = True) -> None:
         """
         Set device poweroff timeout.
 
@@ -467,11 +458,11 @@ class Printer:
         request = bytes.fromhex('10ff12') + int.to_bytes(timeout, 2, 'big')
 
         if wait:
-            return self.askPrinter(request)
+            return await self.askPrinter(request)
         else:
-            self.tellPrinter(request)
+            await self.tellPrinter(request)
 
-    def setConcentration(self, concentration: int, wait: bool=False) -> None:
+    async def setConcentration(self, concentration: int, wait: bool = False) -> None:
         """
         Set printing concentration level.
 
@@ -493,11 +484,11 @@ class Printer:
             request = bytes.fromhex('10ff100002')
 
         if wait:
-            return self.askPrinter(request)
+            return await self.askPrinter(request)
         else:
-            self.tellPrinter(request)
+            await self.tellPrinter(request)
 
-    def reset(self) -> None:
+    async def reset(self) -> None:
         """
         Send reset request, required for initial printer initialization after
         connect/reconnect. Without this operation, printer will not print nor
@@ -506,9 +497,9 @@ class Printer:
         Request: `10fffe01+000000000000000000000000`.
         """
 
-        self.tellPrinter(bytes.fromhex('10fffe01000000000000000000000000'))
+        await self.tellPrinter(bytes.fromhex('10fffe01000000000000000000000000'))
 
-    def printBreak(self, size: int=0x40) -> None:
+    async def printBreak(self, size: int = 0x40) -> None:
         """
         Ask printer to print out a break of fixed size.
 
@@ -524,9 +515,9 @@ class Printer:
         size = min(0xff, max(0x01, size))
         request = bytes.fromhex('1b4a') + int.to_bytes(size, 1, 'big')
 
-        self.tellPrinter(request)
+        await self.tellPrinter(request)
 
-    def writeASCII(self, text: str='\n', wait=False) -> None:
+    async def writeASCII(self, text: str = '\n', wait=False) -> None:
         """
         WARNING: THIS API IS UNSAFE
 
@@ -548,11 +539,11 @@ class Printer:
         request = text.encode('ascii')
 
         if wait:
-            return self.askPrinter(request)
+            return await self.askPrinter(request)
         else:
-            self.tellPrinter(request)
+            await self.tellPrinter(request)
 
-    def printlnASCII(self, text: str='', delay: float=0.25) -> None:
+    async def printlnASCII(self, text: str = '', delay: float = 0.25) -> None:
         """
         Safe to use printing method that relies on in-class buffer for wrapping
         text. The input is filtered with `Printer.filter_ascii` in order to
@@ -570,9 +561,9 @@ class Printer:
         * `delay` - delay between lines submission, seconds
         """
 
-        self.printASCII(text=text + '\n', delay=delay)
+        await self.printASCII(text=text + '\n', delay=delay)
 
-    def printASCII(self, text: str='\n', delay: float=0.25) -> None:
+    async def printASCII(self, text: str = '\n', delay: float = 0.25) -> None:
         """
         Safe to use printing method that relies on in-class buffer for wrapping
         text. The input is filtered with `Printer.filter_ascii` in order to
@@ -615,8 +606,8 @@ class Printer:
 
             # Flush previuos incomplete line
             if len(self.print_buffer) != 0:
-                self.tellPrinter(self.print_buffer.encode('ascii'))
-                self.tellPrinter(b'\n')
+                await self.tellPrinter(self.print_buffer.encode('ascii'))
+                await self.tellPrinter(b'\n')
                 self.print_buffer = ''
                 time.sleep(delay)
 
@@ -625,34 +616,35 @@ class Printer:
 
                 # Flush in-printer buffer if not empty
                 if len(self.print_buffer) != 0:
-                    self.tellPrinter(self.print_buffer.encode('ascii'))
-                    self.tellPrinter(b'\n')
+                    await self.tellPrinter(self.print_buffer.encode('ascii'))
+                    await self.tellPrinter(b'\n')
                     self.print_buffer = ''
                     time.sleep(delay)
 
                 # Trail
                 else:
-                    self.printBreak(30)
+                    await self.printBreak(30)
                     time.sleep(delay)
 
             # Process normal lines
             else:
                 # Wrap line
-                parts = [ l[i:i+self.getRowCharacters()] for i in range(0, len(l), self.getRowCharacters()) ]
+                parts = [l[i:i+self.getRowCharacters()]
+                         for i in range(0, len(l), self.getRowCharacters())]
 
                 for p in parts:
 
                     # Print full line
                     if len(p) == self.getRowCharacters():
-                        self.tellPrinter(p.encode('ascii'))
-                        self.tellPrinter(b'\n')
+                        await self.tellPrinter(p.encode('ascii'))
+                        await self.tellPrinter(b'\n')
                         time.sleep(delay)
 
                     # Partial, write to buffer
                     else:
                         self.print_buffer = p
 
-    def flushASCII(self, delay: float=0.25) -> None:
+    async def flushASCII(self, delay: float = 0.25) -> None:
         """
         Force=print out buffer if it is not empty. Not equal to
         `Printer.println()` because does not output empty newline if buffer is
@@ -665,12 +657,12 @@ class Printer:
         """
 
         if len(self.print_buffer) != 0:
-            self.tellPrinter(self.print_buffer.encode('ascii'))
-            self.tellPrinter(b'\n')
+            await self.tellPrinter(self.print_buffer.encode('ascii'))
+            await self.tellPrinter(b'\n')
             self.print_buffer = ''
             time.sleep(delay)
 
-    def printRow(self, rowbytes: bytes, delay: float=0.01) -> None:
+    async def printRow(self, rowbytes: bytes, delay: float = 0.01) -> None:
         """
         Send bytes representing a single image row in binary black/white mode.
         If amount of bydes exceedes the `Printer.getRowBytes()` constant, input
@@ -696,16 +688,17 @@ class Printer:
         elif len(rowbytes) > expectedLen:
             rowbytes = rowbytes[:expectedLen]
 
-        self.reset()
+        await self.reset()
 
         # Notify printer about incomming $expectedLen bytes row
-        request = bytes.fromhex('1d763000') + int.to_bytes(self.getRowBytes(), 1, 'big') + bytes.fromhex('000100') + rowbytes
-        self.tellPrinter(request)
+        request = bytes.fromhex('1d763000') + int.to_bytes(self.getRowBytes(),
+                                                           1, 'big') + bytes.fromhex('000100') + rowbytes
+        await self.tellPrinter(request)
         time.sleep(delay)
 
         # We're done here
 
-    def printRowBytesList(self, rowbytes: typing.Iterable[bytes], delay: float=0.01) -> None:
+    async def printRowBytesList(self, rowbytes: typing.Iterable[bytes], delay: float = 0.01) -> None:
         """
         Send an array of bytes representing a multiple image rows in binary
         black/white mode. If amount of bydes per row exceedes the
@@ -734,19 +727,21 @@ class Printer:
             return
 
         expectedLen = self.getRowBytes()
-        chunks = [ rowbytes[i:i+0xff] for i in range(0, len(rowbytes), 0xff) ]
+        chunks = [rowbytes[i:i+0xff] for i in range(0, len(rowbytes), 0xff)]
 
         for chunk in chunks:
 
             # Reset state before print
-            self.reset()
+            await self.reset()
 
             #                 1d763000    30                    00    01                     00
             # Send preamble: `1d763000` + row_bytes:bytes[1] + `00` + chunk_size:bytes[1] + `00`
-            request = bytes.fromhex('1d763000') + int.to_bytes(self.getRowBytes(), 1, 'big') + bytes.fromhex('00') + int.to_bytes(len(chunk), 1, 'big') + bytes.fromhex('00')
+            request = bytes.fromhex('1d763000') + int.to_bytes(self.getRowBytes(), 1, 'big') + \
+                bytes.fromhex('00') + int.to_bytes(len(chunk),
+                                                   1, 'big') + bytes.fromhex('00')
 
             # Flush preamble
-            self.tellPrinter(request)
+            await self.tellPrinter(request)
 
             # Flush rows dith delay
             for row in chunk:
@@ -756,11 +751,11 @@ class Printer:
                 elif len(row) > expectedLen:
                     row = row[:expectedLen]
 
-                self.tellPrinter(row)
+                await self.tellPrinter(row)
 
                 time.sleep(delay)
 
-    def printRowBytesIterator(self, rowiterator: typing.Iterable[bytes], delay: float=0.01) -> None:
+    async def printRowBytesIterator(self, rowiterator: typing.Iterable[bytes], delay: float = 0.01) -> None:
         """
         Iterate over the given iterator and print out all produced rows. This
         method is very slow as it required printer to oftenly switch on/off
@@ -774,9 +769,9 @@ class Printer:
         """
 
         for r in rowiterator:
-            self.printRow(r, delay=delay)
+            await self.printRow(r, delay=delay)
 
-    def printRowChunksIterator(self, rowiterator: typing.Iterable[typing.List[bytes]], delay: float=0.01) -> None:
+    async def printRowChunksIterator(self, rowiterator: typing.Iterable[typing.List[bytes]], delay: float = 0.01) -> None:
         """
         Iterate over the given iterator and print out all produced chunks of
         rows. One chunk of rows is a list of bytes where each bytes define the
@@ -790,9 +785,9 @@ class Printer:
         """
 
         for chunk in rowiterator:
-            self.printRowBytesList(chunk, delay=delay)
+            await self.printRowBytesList(chunk, delay=delay)
 
-    def printImageBytes(self, imagebytes: bytes, delay: float=0.01) -> None:
+    async def printImageBytes(self, imagebytes: bytes, delay: float = 0.01) -> None:
         """
         Send an bytes representing single-line encoded image. For example,
         `[0xff000000, 0x00ff0000, 0x0000ff00, 0x000000ff]` is encoded as
@@ -815,9 +810,10 @@ class Printer:
             return
 
         # Delegate to impl
-        self.printRowBytesList([ imagebytes[i:i+self.getRowBytes()] for i in range(0, len(imagebytes), self.getRowBytes()) ], delay=delay)
+        await self.printRowBytesList([imagebytes[i:i+self.getRowBytes()]
+                               for i in range(0, len(imagebytes), self.getRowBytes())], delay=delay)
 
-    def printImage(self, img: PIL.Image.Image, delay=0.01, resample=PIL.Image.Resampling.NEAREST) -> None:
+    async def printImage(self, img: PIL.Image.Image, delay=0.01, resample=PIL.Image.Resampling.NEAREST) -> None:
         """
         Print PIL Image on this printer with automatic internal to-blackwhite
         conversion.
@@ -836,13 +832,14 @@ class Printer:
 
         img = img.convert('L')
         img = PIL.ImageOps.invert(img)
-        img = img.resize((self.getRowWidth(), int(self.getRowWidth() / img.size[0] * img.size[1])), resample)
+        img = img.resize((self.getRowWidth(), int(
+            self.getRowWidth() / img.size[0] * img.size[1])), resample)
         img = img.convert('1')
 
         imgbytes = img.tobytes()
-        self.printImageBytes(imgbytes, delay=delay)
+        await self.printImageBytes(imgbytes, delay=delay)
 
-    def printImageIterator(self, imgiterator: typing.Iterable[PIL.Image.Image], delay: float=0.01):
+    async def printImageIterator(self, imgiterator: typing.Iterable[PIL.Image.Image], delay: float = 0.01):
         """
         Iterate over iterator and print out each PIL Image that it returns.
 
@@ -852,9 +849,9 @@ class Printer:
         """
 
         for img in imgiterator:
-            self.printImage(img, delay=delay)
+            await self.printImage(img, delay=delay)
 
-    def printQR(self, text: str, delay: float=0.01, resample=PIL.Image.Resampling.NEAREST) -> None:
+    async def printQR(self, text: str, delay: float = 0.01, resample=PIL.Image.Resampling.NEAREST) -> None:
         """
         Generate a QR code from specified string and print it.
 
@@ -865,4 +862,5 @@ class Printer:
         rescale image to fit the printer width of `Printer.getRowWidth()`.
         """
 
-        self.printImage(qrcode.make(text, border=0), delay=delay, resample=resample)
+        await self.printImage(qrcode.make(text, border=0),
+                        delay=delay, resample=resample)

@@ -15,13 +15,17 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-def main():
+import asyncio
+
+
+async def main():
     import argparse
     import sys
     import peripage
     import PIL.Image
 
-    parser = argparse.ArgumentParser(description='Print on a Peripage printer via bluetooth')
+    parser = argparse.ArgumentParser(
+        description='Print on a Peripage printer via bluetooth')
     parser.add_argument(
         '-m', '--mac',
         help='Bluetooth MAC address of the printer',
@@ -84,83 +88,84 @@ def main():
 
     # Open connection
     printer = peripage.Printer(args.mac, peripage.PrinterType[args.printer])
-    printer.connect()
-    printer.reset()
+    await printer.connect()
+    await printer.reset()
 
     # Act based on args
     if 'introduce' in args and args.introduce:
 
         # print('Hello, my name is Harold..')
-        print(printer.getDeviceFull().decode('ascii'))
-        printer.disconnect()
+        device_full = await printer.getDeviceFull()
+        print(device_full.decode('ascii'))
+        await printer.disconnect()
         sys.exit(0)
 
     elif 'stream' in args and args.stream:
 
-        printer.setConcentration(args.concentration)
+        await printer.setConcentration(args.concentration)
 
         while True:
             try:
                 line = input().rstrip()
 
-                printer.printlnASCII(line)
+                await printer.printlnASCII(line)
 
             except EOFError:
                 # Input closed ^d^d
                 break
 
         if args.break_size > 0:
-            printer.printBreak(args.break_size)
+            await printer.printBreak(args.break_size)
 
-        printer.disconnect()
+        await printer.disconnect()
 
         sys.exit(0)
 
     elif 'text' in args and args.text is not None:
 
-        printer.setConcentration(args.concentration)
+        await printer.setConcentration(args.concentration)
 
         text = args.text.rstrip()
 
         if len(text) > 0:
-            printer.printASCII(text)
-            printer.flushASCII()
+            await printer.printASCII(text)
+            await printer.flushASCII()
 
         if args.break_size > 0:
-            printer.printBreak(args.break_size)
+            await printer.printBreak(args.break_size)
 
-        printer.disconnect()
+        await printer.disconnect()
 
         sys.exit(0)
 
     elif 'image' in args and args.image is not None:
 
-        printer.setConcentration(args.concentration)
+        await printer.setConcentration(args.concentration)
 
         try:
             img = PIL.Image.open(args.image)
         except:
-            print(f'Failed to open image { args.image }')
+            print(f'Failed to open image {args.image}')
 
-        printer.printImage(img)
+        await printer.printImage(img, resample=PIL.Image.Resampling.BOX)
 
         if args.break_size > 0:
-            printer.printBreak(args.break_size)
+            await printer.printBreak(args.break_size)
 
-        printer.disconnect()
+        await printer.disconnect()
 
         sys.exit(0)
 
     elif 'qr' in args and args.qr is not None:
 
-        printer.setConcentration(args.concentration)
+        await printer.setConcentration(args.concentration)
 
-        printer.printQR(args.qr)
+        await printer.printQR(args.qr)
 
         if args.break_size > 0:
-            printer.printBreak(args.break_size)
+            await printer.printBreak(args.break_size)
 
-        printer.disconnect()
+        await printer.disconnect()
 
         sys.exit(0)
 
@@ -169,4 +174,4 @@ def main():
         print('How did you get there?')
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())

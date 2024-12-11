@@ -1,8 +1,6 @@
 # peripage-python-bleak
 ### Python module for printing on Peripage printers
 
-**Still in the stage of development**
-
 **This is the same python module for Peripage printers
 But instead of using pybluez for bluetooth in python, I changed it to the library of bleak, as pybluez is no longer in development and is hard to install under windows.**
 
