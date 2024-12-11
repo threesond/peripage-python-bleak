@@ -1,6 +1,15 @@
 # peripage-python-bleak
 ### Python module for printing on Peripage printers
 
+**update**
+added txt file printing api
+you must specify the text file path and font file path
+
+```bash
+
+python -m peripage -m 45:54:07:0d:39:48 -p A6p -b 100 -c 2 -tf 1.txt -fo font.ttf
+```
+
 **This is the same python module for Peripage printers
 But instead of using pybluez for bluetooth in python, I changed it to the library of bleak, as pybluez is no longer in development and is hard to install under windows.**
 
